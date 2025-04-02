@@ -7,19 +7,14 @@ library(readxl)
 library(ggplot2)
 library(tidytext)
 library(reshape2)
-library(data.table)
 library(gridExtra)
+library(data.table)
 
 
-
-AUSSIE_PATIENT_DATA_PATH <- paste0("Y:\\Lucas\\ERVcaller-project\\",
+PATIENT_DATA_PATH <- paste0("Y:\\Lucas\\ERVcaller-project\\",
                                    "documentation\\aussie-file-tracker.xlsx")
-BAYLOR_PATIENT_DATA_PATH <- paste0("Y:\\Lucas\\ERVcaller-project\\",
-                                   "documentation\\baylor-patient-data.xlsx")
-AUSSIE_OUTPUT_PATH <- paste0("Y:\\Lucas\\ERVcaller-project\\",
+OUTPUT_PATH <- paste0("Y:\\Lucas\\ERVcaller-project\\",
                              "ERVcaller-output\\aussie\\all-chr\\")
-BAYLOR_OUTPUT_PATH <- paste0("Y:\\Lucas\\ERVcaller-project\\",
-                             "ERVcaller-output\\baylor\\")
 ERV_REFERENCE_PATH <- "Y:\\Lucas\\ERVcaller-project\\ERVs.xlsx"
 DATA_FRAMES_PATH <- "Y:\\Lucas\\ERVcaller-project\\data-frames\\"
 
@@ -27,8 +22,8 @@ DATA_FRAMES_PATH <- "Y:\\Lucas\\ERVcaller-project\\data-frames\\"
 #' 
 #' @param file_number Number id
 #' @return A data frame with fixed data from vcf
-read_aussie_vcf <- function(file_number) {
-  path <- paste0(AUSSIE_OUTPUT_PATH, "SRR", as.character(file_number),
+read_vcf <- function(file_number) {
+  path <- paste0(OUTPUT_PATH, "SRR", as.character(file_number),
                  ".vcf")
   tryCatch(
     as.data.frame(read.vcfR(path)@fix),
@@ -109,7 +104,7 @@ inclusive_comparison <- function(insertion_1, insertion_2) {
 
 #' Fetches main ERVcaller output data from Aussie sample
 #' 
-#' @param .aussie_patient_data metadata about patients
+#' @param .patient_data metadata about patients
 #' @param erv_reference data frame with erv_names
 #' @param erv_only whether you should filter for HERVs
 #' 
@@ -131,15 +126,15 @@ inclusive_comparison <- function(insertion_1, insertion_2) {
 #'  \item `all_insertions` (data frame): insertions found in either blood or
 #'  tumour
 #'  }
-fetch_aussie_patients <- function(.aussie_patient_data, erv_reference,
+fetch_patients <- function(.patient_data, erv_reference,
                                   erv_only = FALSE) {
-  .aussie_patient_data %>%
+  .patient_data %>%
     rowwise() %>%
     mutate(blood_insertions = list(format_insertions(
-      read_aussie_vcf(blood_file_number), erv_reference, erv_only)),
+      read_vcf(blood_file_number), erv_reference, erv_only)),
       
       tumour_insertions = list(format_insertions(
-        read_aussie_vcf(tumour_file_number), erv_reference, erv_only))) %>%
+        read_vcf(tumour_file_number), erv_reference, erv_only))) %>%
     
     # for missing VCFs
     filter(!is.null(blood_insertions) & !is.null(tumour_insertions)) %>%
@@ -159,36 +154,10 @@ fetch_aussie_patients <- function(.aussie_patient_data, erv_reference,
              inclusive_comparison(blood_insertions, tumour_insertions))
 }
 
-#' Fetches main ERVcaller output data from Baylor sample
-#' 
-#' @param .baylor_patient_data metadata about patients
-#' @param erv_reference data frame with erv names
-#' @param erv_only whether you should filter for HERVs
-#' 
-#' @return data frame
-#' \itemize{
-#'  \item `id` (character): patient ID
-#'  \item `race` (character): African or European
-#'  \item `gleason` (integer): Gleason score
-#'  \item `tumour_stage` (character): Tumour date pT___
-#'  \item `treatment` (vector): P({ surgery, radiation, ADT })
-#'  \item `age` (integer): Age
-#'  \item `time` (integer): In months
-#'  \item `insertions` (data frame): insertions found
-#'  }
-fetch_baylor_patients <- function(.baylor_patient_data, erv_reference,
-                                  erv_only = FALSE) {
-  .baylor_patient_data %>%
-    rowwise() %>%
-    mutate(insertions = list(format_insertions(tryCatch(
-      as.data.frame(read.vcfR(paste0(BAYLOR_OUTPUT_PATH, id, ".vcf"))@fix)
-      , error = function(e) { NULL }), erv_reference, erv_only))) %>%
-    filter(!is.null(insertions))
-}
 
 #' Generates grid of every insertion and whether each patient had it
 #' 
-#' @param aussie_patients data frame with sample data
+#' @param patients data frame with sample data
 #' @param insertions column with insertion data
 #' 
 #' @return data frame grid
@@ -199,13 +168,13 @@ fetch_baylor_patients <- function(.baylor_patient_data, erv_reference,
 #'  \item `alternative` (character): insertion type
 #'  \item `+` (1 | NA) one column for each patient; whether patient has it
 #' }
-get_grid <- function(aussie_patients, insertions) {
+get_grid <- function(patients, insertions) {
   grid <- data.frame(chromosome = character(),
                      position = character(),
                      reference = character(),
                      alternative = character())
-  for (i in 1:nrow(aussie_patients)) {
-    patient_id <- make.names(aussie_patients$id[i])
+  for (i in 1:nrow(patients)) {
+    patient_id <- make.names(patients$id[i])
     grid <- full_join(grid, insertions[[i]],
                       by = c("chromosome", "position")) %>%
       mutate(!!patient_id := ifelse(!is.na(reference.y), 1, NA)) %>%
@@ -370,16 +339,29 @@ plot_difference_in_proportions <- function(insertion_count, chromosome_value) {
     labs(x = "Insertion Start Position",
          y = "Difference In Proportions")
 }
-#
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
 
-#
+#' Plots a single chromosome
+#' 
+#' @param bins data frame with bins for sections of the base positions
+#' @param cohort_sum either African or European filter
+#' @param colour for high count
+#' @param bin_size size of bin, init
+#' @returns plot colour gradient graph
+plot_column_heatmap <- function(bins, cohort_sum, colour, bin_size) {
+  ggplot(bins, aes(x = 0, y = position_bin, fill = cohort_sum, height = bin_size)) +
+    geom_tile() +
+    scale_fill_gradient(low = "white", high = colour) +  
+    scale_y_reverse() +
+    scale_x_continuous(breaks = 0) +
+    labs(x = "", y = "", fill = "Proportion") +
+    theme_minimal() +
+    theme(panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          legend.position = "none")
+}
+  
 #' Generates a gradient tile visualization for proportions of each race's frequencies of
 #' insertions above a minimum proportion for a chromosome
 #' 
@@ -398,25 +380,11 @@ plot_proportions_gradient <- function(insertion_count,
                                       scale_max = 1,
                                       bin_size = NULL,
                                       debug = FALSE) {
-  
-  # Separate filtering for African and European proportions
-  filtered_african <- insertion_count %>%
-    filter(chromosome == chromosome_value,
-           african_proportion > minimum_proportion)
-  
-  filtered_european <- insertion_count %>%
-    filter(chromosome == chromosome_value,
-           european_proportion > minimum_proportion)
-  
   # Debug info
   if(debug) {
     cat("Filtered African data dimensions:", nrow(filtered_african), "rows x", ncol(filtered_african), "columns\n")
     cat("Filtered European data dimensions:", nrow(filtered_european), "rows x", ncol(filtered_european), "columns\n")
   }
-  
-  # Set y-axis limit
-  y_min <- 0
-  y_max <- ifelse(!is.null(length), length, max(insertion_count$position, na.rm = TRUE) * 1.01)
   
   # Determine bin size if not provided
   if(is.null(bin_size)) {
@@ -425,91 +393,29 @@ plot_proportions_gradient <- function(insertion_count,
     if(debug) cat("Auto-calculated bin size:", bin_size, "\n")
   }
   
-  # Create binned data for African proportion
-  binned_african <- filtered_african %>%
+  bins <- insertion_count %>%
+    filter(chromosome == chromosome_value) %>%
     mutate(position_bin = floor(position / bin_size) * bin_size) %>%
     group_by(position_bin) %>%
     summarize(
-      african_proportion_mean = mean(african_proportion, na.rm = TRUE),
-      count = n()
+      african_sum = sum(african_count),
+      european_sum = sum(european_count)
     ) %>%
-    ungroup()
-  
-  # Create binned data for European proportion
-  binned_european <- filtered_european %>%
-    mutate(position_bin = floor(position / bin_size) * bin_size) %>%
-    group_by(position_bin) %>%
-    summarize(
-      european_proportion_mean = mean(european_proportion, na.rm = TRUE),
-      count = n()
-    ) %>%
-    ungroup()
-  
-  # Ensure values are within range to avoid warnings
-  binned_african <- binned_african %>%
-    mutate(african_proportion_mean = pmin(pmax(african_proportion_mean, scale_min), scale_max))
-  
-  binned_european <- binned_european %>%
-    mutate(european_proportion_mean = pmin(pmax(european_proportion_mean, scale_min), scale_max))
-  
-  transform_color <- function(x) sqrt(x)
+    ungroup() %>%
+    select(position_bin, african_sum, european_sum)
 
-  
-  # Create plot for African proportion
-  p1 <- ggplot(binned_african, 
-               aes(x = 0, y = position_bin, fill = transform_color(african_proportion_mean), height = bin_size)) +
-    geom_tile(width = 0.8) +
-    scale_fill_gradient(low = "white", high = "red", 
-                        limits = c(transform_color(0), transform_color(0.7)),
-                        na.value = "grey90") +  
-    scale_y_continuous(limits = c(y_min, y_max)) +
-    scale_x_continuous(breaks = 0, labels = "African") +
-    labs(title = paste0("African Proportion, ", chromosome_value),
-         x = "",
-         y = "Position (Mb)",
-         fill = "Proportion") +
-    theme_minimal() +
-    theme(panel.grid.major.x = element_blank(),
-          panel.grid.minor.x = element_blank())
-  
-  # Create plot for European proportion  
-  p2 <- ggplot(binned_european, 
-               aes(x = 0, y = position_bin, fill = transform_color(european_proportion_mean), height = bin_size)) +
-    geom_tile(width = 0.8) +
-    scale_fill_gradient(low = "white", high = "blue", 
-                        limits = c(transform_color(0), transform_color(0.7)),
-                        na.value = "grey90") +  
-    scale_y_continuous(limits = c(y_min, y_max),
-                       labels = function(x) x/1000000) +  
-    scale_x_continuous(breaks = 0, labels = "European") +
-    labs(title = paste0("European Proportion, ", chromosome_value),
-         x = "",
-         y = "Position (Mb)",
-         fill = "Proportion") +
-    theme_minimal() +
-    theme(panel.grid.major.x = element_blank(),
-          panel.grid.minor.x = element_blank())
+  african_chromosome <- plot_column_heatmap(bins, bins$african_sum, "green", bin_size)
+  european_chromosome <- plot_column_heatmap(bins, bins$european_sum, "orange", bin_size)
   
   # Combine plots
-  grid.arrange(p1, p2, ncol = 2,
-               top = grid::textGrob(paste0("Insertion Proportions, ", chromosome_value),
+  grid.arrange(african_chromosome, european_chromosome, ncol = 2,
+               top = grid::textGrob(chromosome_value,
                                     gp = grid::gpar(fontsize = 14, font = 2)))
 }
 
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-#     THIS IS A WORK IN PROGRESS PLEASE DONT BREAK INSHALLAH
-
 
 # metadata
-.aussie_patient_data <- read_xlsx(AUSSIE_PATIENT_DATA_PATH,
+.patient_data <- read_xlsx(PATIENT_DATA_PATH,
                                   range = "A3:G18") %>%
   rename(id = `Patient ID`,
          race = Race,
@@ -519,26 +425,6 @@ plot_proportions_gradient <- function(insertion_count,
          blood_file_number = Blood,
          tumour_file_number = Tumour)
 
-.baylor_patient_data <- read_xlsx(BAYLOR_PATIENT_DATA_PATH, 
-                                  sheet = "clinical_data") %>%
-  rename(id = `Assigned Name`,
-         race = `RACE/ETHNICITY`,
-         tumour_stage = `Tumor stage`,
-         gleason_primary = `Gleason_primary`,
-         gleason_secondary = `Gleason_secondary`,
-         age = Age,
-         time = time_rp_lastFU) %>%
-  mutate(race = gsub("WA", "European", race),
-         race = gsub("BA", "African", race),
-         gleason = gleason_primary + gleason_secondary,
-         treatment = gsub(" only", "", treatment),
-         treatment = strsplit(treatment, ", "),
-         treatment = trimws(treatment),
-         time = gsub("months", "", time),
-         time = gsub("month", "", time),
-         time = trimws(time),
-         time = as.integer(time)) %>%
-  select(id, race, tumour_stage, gleason, treatment, age, time)
 
 .erv_reference <- read_xlsx(
   ERV_REFERENCE_PATH, sheet = "Sheet1",
@@ -548,24 +434,19 @@ plot_proportions_gradient <- function(insertion_count,
   mutate(chromosome = paste0("chr", chromosome))
 
 # main samples
-aussie_patients <- fetch_aussie_patients(.aussie_patient_data, .erv_reference)
-aussie_patients_herv <- fetch_aussie_patients(.aussie_patient_data,
+patients <- fetch_patients(.patient_data, .erv_reference)
+patients_erv <- fetch_patients(.patient_data,
                                               .erv_reference, erv_only = TRUE)
 
-# Baylor samples showed almost no HERV insertions
-baylor_patients <- fetch_baylor_patients(.baylor_patient_data, .erv_reference)
-
 # insertion focus
-.blood_grid <- get_grid(aussie_patients, aussie_patients$blood_insertions)
-.tumour_grid <- get_grid(aussie_patients, aussie_patients$tumour_insertions)
-.baylor_grid <- get_grid(baylor_patients, baylor_patients$insertions)
+.blood_grid <- get_grid(patients, patients$blood_insertions)
+.tumour_grid <- get_grid(patients, patients$tumour_insertions)
 
 # long table to make plots
-.blood_table <- get_table(.blood_grid, .aussie_patient_data)
-.tumour_table <- get_table(.tumour_grid, .aussie_patient_data)
-.baylor_table <- get_table(.baylor_grid, .baylor_patient_data)
+.blood_table <- get_table(.blood_grid, .patient_data)
+.tumour_table <- get_table(.tumour_grid, .patient_data)
 
-.aussie_table <- full_join(
+.table <- full_join(
   .blood_table, .tumour_table,
   by = c("chromosome", "position", "patient", "race"),
   suffix = c(".blood", ".tumour")) %>%
@@ -588,48 +469,36 @@ baylor_patients <- fetch_baylor_patients(.baylor_patient_data, .erv_reference)
   arrange(alternative, chromosome, position)
 
 # frequency comparison for insertions
-aussie_insertions <- count_insertions(.aussie_table, "Tumour",
-                                      aussie_patients)
-aussie_insertions_erv <- aussie_insertions %>%
+insertions <- count_insertions(.table, "Tumour",
+                                      patients)
+insertions_erv <- insertions %>%
   filter(alternative %in% c("HERV", "SVA"))
-baylor_insertions <- count_insertions(.baylor_table, 1, baylor_patients)
+
 
 # exporting tables
-write_rds(aussie_patients, paste0(DATA_FRAMES_PATH, "aussie_patients.rds"))
-write_rds(aussie_patients_herv, paste0(DATA_FRAMES_PATH,
-                                       "aussie_patients_herv.rds"))
-write_rds(baylor_patients, paste0(DATA_FRAMES_PATH, "baylor_patients.rds"))
+write_rds(patients, paste0(DATA_FRAMES_PATH, "patients.rds"))
+write_rds(patients_erv, paste0(DATA_FRAMES_PATH,
+                                       "patients_erv.rds"))
 write_rds(.blood_grid, paste0(DATA_FRAMES_PATH, "blood_grid.rds"))
 write_rds(.tumour_grid, paste0(DATA_FRAMES_PATH, "tumour_grid.rds"))
-write_rds(.baylor_grid, paste0(DATA_FRAMES_PATH, "baylor_grid.rds"))
-write_rds(aussie_insertions, paste0(DATA_FRAMES_PATH,
-                                    "aussie_insertions.rds"))
-write_rds(aussie_insertions_erv, paste0(DATA_FRAMES_PATH,
-                                        "aussie_insertions_erv.rds"))
-write_rds(baylor_insertions, paste0(DATA_FRAMES_PATH,
-                                    "baylor_insertions.rds"))
+write_rds(insertions, paste0(DATA_FRAMES_PATH,
+                                    "insertions.rds"))
+write_rds(insertions_erv, paste0(DATA_FRAMES_PATH,
+                                        "insertions_erv.rds"))
 
-# Q-Q plot to check for normality - Aussie checks out... Baylor, not so much
+
+# Q-Q plot to check for normality - Aussie checks out
 # (400 x 300)
-check_qq_plot(aussie_patients, "African", "exclusive_tumour_insertions")
-check_qq_plot(aussie_patients, "European", "exclusive_tumour_insertions")
-check_qq_plot(aussie_patients_herv, "African", "tumour_insertions")
-check_qq_plot(aussie_patients_herv, "European", "tumour_insertions")
-check_qq_plot(baylor_patients, "African", "insertions")
-check_qq_plot(baylor_patients, "European", "insertions")
-
+check_qq_plot(patients, "African", "exclusive_tumour_insertions")
+check_qq_plot(patients, "European", "exclusive_tumour_insertions")
 
 # box plot of ERV insertions over race (540 x 540)
-make_box_plot(aussie_patients, "tumour_insertions", "Aussie, Tumour Insertions")
-make_box_plot(aussie_patients, "exclusive_tumour_insertions",
-              "Aussie, Exclusive Tumour Insertions")
-make_box_plot(aussie_patients, "all_insertions", "Aussie, All Insertions")
-make_box_plot(aussie_patients_herv, "tumour_insertions", "Aussie, Tumour HERV")
-make_box_plot(baylor_patients, "insertions", "Baylor, All Insertions")
+make_box_plot(patients, "exclusive_tumour_insertions",
+              "Exclusive Tumour Insertions")
 
 # TODO try with HERV
 # grid of genes over Aussie patients (whether on blood and tumour)
-# ggplot(.aussie_table %>% mutate(position = as.character(position)),
+# ggplot(.table %>% mutate(position = as.character(position)),
 #       aes(patient, position, fill = insertion)) +
 #  geom_tile() +
 #  scale_fill_manual(values = c("Blood" = "red", 
@@ -640,10 +509,19 @@ make_box_plot(baylor_patients, "insertions", "Baylor, All Insertions")
 #  theme(axis.text.x = element_text(size = 6))
 
 # heart monitor
-plot_proportions(aussie_insertions, 'chr1', 0.2)
+plot_proportions(insertions, 'chr1', 0.2)
 
 # chromo
-plot_difference_in_proportions(aussie_insertions, "chr1")
+plot_difference_in_proportions(insertions, "chr1")
 
 # attempt on bar chromosomal position
-plot_proportions_gradient(aussie_insertions, "chr1", 0.4, bin_size = 2500000)
+plot_proportions_gradient(insertions, "chr1", 0.4, bin_size = 2500000)
+.chromosomes <- c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6",
+                  "chr7", "chr8", "chr9", "chr10", "chr11",
+                  "chr12", "chr13", "chr14", "chr15", "chr16",
+                  "chr17", "chr18", "chr19", "chr20", "chr21",
+                  "chr22", "chrX", "chrY")
+plots <- map(.chromosomes,
+             ~ plot_proportions_gradient(insertions, .x, 0.4, bin_size = 2500000))
+do.call(grid.arrange, c(plots, ncol = 6))
+
