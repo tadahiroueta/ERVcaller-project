@@ -1,0 +1,228 @@
+---
+title: "TE Insertion Analysis"
+author: "tadahiroueta"
+format: html
+server: shiny
+---
+
+## TE Insertion Analysis
+
+This document serves as the analysis portion of the "Transposable element patterns across genetic ancestries in prostate cancer patients" research project presented at the 2025 AACR conference, by Nicholas Korvink and Lucas Ueta.
+
+### Dependencies
+
+```{r}
+library(vcfR)
+library(dplyr)
+library(readr)
+library(tidyr)
+library(purrr)
+library(readxl)
+library(ggplot2)
+library(chromoMap)
+```
+
+### File paths
+
+```{r}
+.PATIENT_DATA_PATH <- paste0("Y:\\Lucas\\ERVcaller-project\\",
+                             "documentation\\aussie-file-tracker.xlsx")
+
+.OUTPUT_PATH <- paste0("Y:\\Lucas\\ERVcaller-project\\",
+                       "ERVcaller-output\\aussie\\all-chr\\")
+
+.ERV_REFERENCE_PATH <- "Y:\\Lucas\\ERVcaller-project\\ERVs.xlsx"
+.DATA_FRAMES_PATH <- "Y:\\Lucas\\ERVcaller-project\\data-frames\\"
+```
+
+### Patient metadata
+
+```{r}
+.patient_data <- read_xlsx(.PATIENT_DATA_PATH,range = "A3:G18") %>%
+  rename(id = `Patient ID`,
+         race = Race,
+         gleason = Gleason,
+         tumour_purity = `Tumour purity`,
+         tumour_mutation_burden = `Tumour mutation burden`,
+         blood_file_number = Blood,
+         tumour_file_number = Tumour)
+```
+
+### Parsing VCF files
+
+```{r}
+#' Parses vcf file
+#' 
+#' @param file_number Number id
+#' @return A data frame with fixed data from vcf
+read_vcf <- function(file_number) {
+  path <- paste0(.OUTPUT_PATH, "SRR", as.character(file_number), ".vcf")
+
+  tryCatch(
+    as.data.frame(read.vcfR(path)@fix),
+    error = function(e) { NULL }
+  )
+}
+
+#' Formats ERVcaller output file
+#' 
+#' @param insertions A data frame read from a vcf file
+#' @param target_alternative specific alternative to filter for; defaults to no filter
+#' 
+#' @return Data frame
+#' \itemize{
+#'  \item `chromosome` (character): chr_
+#'  \item `position` (integer): start position of insertion
+#'  \item `reference` (character): nucleotide
+#'  \item `alternative` (character): insertion type
+#'  \item `info` (character): misc
+#'  \item `erv_name` (character): name of ERV
+#' }
+format_insertions <- function(insertions, target_alternative = NULL) {
+  # file hasn't been made
+  if (is.null(insertions)) { return(NULL) }
+  
+  formatted <- insertions %>%
+    select(CHROM, POS, REF, ALT, INFO) %>%
+    rename(chromosome = CHROM,
+           position = POS,
+           reference = REF,
+           alternative = ALT,
+           info = INFO) %>%
+    mutate(position = as.numeric(position),
+           alternative = gsub("<INS_MEI:|>$", "", alternative))
+  
+  if (is.null(target_alternative)) { return(formatted) }
+  
+  formatted %>% filter(alternative == target_alternative)
+}
+
+#' Fetches main ERVcaller output data from Aussie sample
+#' 
+#' @param .patient_data metadata about patients
+#' @param erv_reference data frame with erv_names
+#' @param target_alternative specific alternative to filter for; defaults to no filter
+#' 
+#' @return data frame
+#' \itemize{
+#'  \item `id` (character): patient ID
+#'  \item `race` (character): African or European
+#'  \item `gleason` (integer): Gleason score
+#'  \item `tumour_purity` (numeric): Tumour purity percentage
+#'  \item `tumour_mutation_burden` (numeric): Tumour mutation burden
+#'  \item `blood_insertions` (data frame): insertions found in blood
+#'  \item `tumour_insertions` (data frame): insertions found in tumour
+#'  }
+fetch_patients <- function(.patient_data, target_alternative = NULL) {
+  .patient_data %>%
+    rowwise() %>%
+    mutate(blood_insertions = 
+             list(format_insertions(read_vcf(blood_file_number),
+                                    target_alternative)),
+           tumour_insertions = 
+             list(format_insertions(read_vcf(tumour_file_number),
+                                    target_alternative))) %>%
+    
+    # for missing VCFs
+    filter(!is.null(blood_insertions) & !is.null(tumour_insertions)) %>%
+    select(id, race, tumour_purity, tumour_mutation_burden,
+           blood_insertions, tumour_insertions)
+}
+
+patients <- fetch_patients(.patient_data)
+.patients_erv <- fetch_patients(.patient_data, target_alternative = "HERV")
+.patients_sva <- fetch_patients(.patient_data, target_alternative = "SVA")
+.patients_LINE1 <- fetch_patients(.patient_data, target_alternative = "LINE1")
+.patients_ALU <- fetch_patients(.patient_data, target_alternative = "ALU")
+```
+
+### Count tables
+
+```{r}
+#' Generates simple table with insertion counts
+#' 
+#' @param patients patient insertions data
+#' @returns data frame table with counts of insertion
+get_count_table <- function(patients) {
+  te_count <- patients %>%
+    mutate(tumour_insertion_count = 0,
+           blood_insertion_count = 0) %>%
+    select(id, race, tumour_insertion_count, blood_insertion_count)
+  
+  for (.i in seq_len(nrow(patients))) {
+    te_count$tumour_insertion_count[.i] <- nrow(patients$tumour_insertions[[.i]])
+    te_count$blood_insertion_count[.i] <- nrow(patients$blood_insertions[[.i]])
+  }
+  
+  te_count %>% mutate(differential_insertion_count = 
+                        tumour_insertion_count - blood_insertion_count)
+}
+
+te_count_table <- get_count_table(patients)
+erv_count_table <- get_count_table(.patients_erv)
+.sva_count_table <- get_count_table(.patients_sva)
+.line1_count_table <- get_count_table(.patients_LINE1)
+.alu_count_table <- get_count_table(.patients_ALU)
+```
+
+### Insertion table
+
+```{r}
+#' Generate data frame with all insertions
+#' 
+#' @param patients patient insertion data
+#' @returns data frame with all insertions and their patients
+get_insertions <- function(patients) {
+  insertions <- data.frame(chromosome = character(),
+                           position = numeric(),
+                           reference = character(),
+                           alternative = character(),
+                           info = character(),
+                           race = character(),
+                           tissue = character())
+  
+  for (.i in 1:nrow(patients)) {
+    .patient <- patients[.i, ]
+    
+    .tumour_insertions <- .patient$tumour_insertions[[1]] %>%
+      mutate(race = .patient$race,
+             tissue = "tumour")
+    .blood_insertions <- .patient$blood_insertions[[1]] %>%
+      mutate(race = .patient$race,
+             tissue = "blood")
+  
+    insertions <- insertions %>% bind_rows(.tumour_insertions)
+    insertions <- insertions %>% bind_rows(.blood_insertions)
+  }
+
+  insertions
+}
+
+insertions <- get_insertions(patients)
+```
+
+### Chromosomes
+
+Chromosome data frame for chromoMap
+
+```{r}
+chromosomes <- insertions %>%
+  group_by(chromosome) %>%
+  summarise(start = 1,
+            end = max(position) + 1) %>%
+  arrange(gsub("^chr1(.+)$", "chrA\\1",
+               gsub("^chr2(.+)$", "chrB\\1", chromosome))) %>%
+  as.data.frame()
+```
+
+### Box plots
+
+```{r}
+# TODO
+```
+
+### ChromoMap
+
+```{r}
+# TODO
+```
